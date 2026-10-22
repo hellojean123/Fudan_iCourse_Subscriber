@@ -68,7 +68,7 @@ def _check_session(client: ICourseClient) -> None:
 
 
 def _enumerate_lectures(client: ICourseClient, db: Database,
-                        reporter: Reporter) -> list[tuple[str, str, dict]]:
+                        reporter: Reporter, errors: list | None = None) -> list[tuple[str, str, dict]]:
     """Sync, fast: list every (course_id, course_title, lecture) we'll
     process this run.  Done up-front so the prefetch loop can see across
     course boundaries when picking the "next" lecture."""
@@ -112,13 +112,14 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
                     reporter.course_dedup_skip(title, lec["sub_id"])
             lectures = deduped
 
-            known_processed = db.get_processed_sub_ids(course_id)
+            unprocessed = db.get_unprocessed_lectures(course_id)
+            retry_ids = {row["sub_id"] for row in unprocessed}
             new_lectures = [
                 lec for lec in lectures
                 if lec.get("has_playback")
-                and str(lec["sub_id"]) not in known_processed
+                and (str(lec["sub_id"]) in retry_ids
+                     or db.get_lecture(str(lec["sub_id"])) is None)
             ]
-            unprocessed = db.get_unprocessed_lectures(course_id)
             new_ids = {str(lec["sub_id"]) for lec in new_lectures}
             retry_only = [
                 {"sub_id": u["sub_id"], "sub_title": u["sub_title"],
@@ -141,6 +142,9 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
         except Exception:
             reporter.course_enumeration_error(course_id)
             traceback.print_exc()
+            if errors is None:
+                raise
+            errors.append(f"Course {course_id}: enumeration failed")
     return out
 
 
@@ -148,15 +152,16 @@ def _drive_lectures(client: ICourseClient, db: Database,
                     scheduler: Scheduler, transcriber: Transcriber,
                     summarizer: Summarizer, reporter: Reporter,
                     all_lectures: list[tuple[str, str, dict]],
-                    email_items: list) -> None:
+                    email_items: list) -> list[str]:
     """Phase 2: run each lecture through LectureRunner.
 
     Pre-schedules the first lecture's prefetch (audio + images) before
     entering the loop; subsequent prefetches are kicked off from inside
     each LectureRunner.run via ``next_info``.
     """
+    failures = []
     if not all_lectures:
-        return
+        return failures
 
     runner = LectureRunner(
         client, db, scheduler, transcriber, summarizer, reporter,
@@ -172,11 +177,15 @@ def _drive_lectures(client: ICourseClient, db: Database,
             next_course, _, next_lec = all_lectures[i + 1]
             next_info = (next_course, str(next_lec["sub_id"]))
 
-        _check_session(client)
         try:
+            _check_session(client)
             summary = runner.run(
                 course_id, course_title, lecture, next_info=next_info,
             )
+            state = db.get_lecture(sub_id)
+            if (not summary and state and not state.get("processed_at")
+                    and state.get("error_stage") not in (None, "no_video")):
+                failures.append(f"Lecture {sub_id}: {state['error_stage']} failed")
             if summary:
                 email_items.append({
                     "sub_id": sub_id,
@@ -186,6 +195,7 @@ def _drive_lectures(client: ICourseClient, db: Database,
                     "summary": summary,
                 })
         except Exception:
+            failures.append(f"Lecture {sub_id}: processing failed")
             reporter.lecture_error(sub_id)
             traceback.print_exc()
         finally:
@@ -194,6 +204,7 @@ def _drive_lectures(client: ICourseClient, db: Database,
             # PPTPipeline.submit released the cache.
             scheduler.image_cache.discard(sub_id)
             scheduler.audio_downloader.release(sub_id)
+    return failures
 
 
 def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
@@ -213,17 +224,22 @@ def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
                 })
         reporter.email_recovered_unsent(len(unsent))
 
-    if not (emailer and email_items):
+    # Re-read durable state at the delivery boundary, deduping both recovered
+    # and newly generated items. An already-emailed summary is never queued.
+    pending = {}
+    for item in email_items:
+        row = db.get_lecture(str(item["sub_id"]))
+        if row and not row.get("emailed_at") and (row.get("summary") or "").strip():
+            pending[str(item["sub_id"])] = {**item, "summary": row["summary"]}
+    if not pending:
         return
-    try:
-        reporter.email_summary(len(email_items))
-        if emailer.send(email_items):
-            db.mark_emailed_batch([item["sub_id"] for item in email_items])
-        else:
-            reporter.email_failed()
-    except Exception:
-        reporter.info("[Email] Failed to send:")
-        traceback.print_exc()
+    if emailer is None:
+        raise RuntimeError("Unsent summaries exist but SMTP is not configured")
+    reporter.email_summary(len(pending))
+    if not emailer.send(list(pending.values())):
+        reporter.email_failed()
+        raise RuntimeError("Email delivery failed; summaries remain unsent")
+    db.mark_emailed_batch(list(pending))
 
 
 def _crawl_semester_catalog(client: ICourseClient, db: Database,
@@ -305,14 +321,21 @@ def run():
     if corrected:
         print(f"  [Date] Synced {corrected} lecture date(s) from sub_title", flush=True)
     transcriber = Transcriber()
-    summarizer = Summarizer() if config.COURSE_IDS else None
     emailer = Emailer() if (
         config.SMTP_EMAIL and config.SMTP_PASSWORD
     ) else None
 
+    # Deliver durable summaries even during a provider outage.
+    if config.COURSE_IDS:
+        _send_email(emailer, db, reporter, [])
+    summarizer = Summarizer() if config.COURSE_IDS else None
+    # Fail before expensive crawling/ASR when every configured endpoint is down.
+    if summarizer:
+        summarizer.check_providers()
     vpn = login_with_retry()
     client = ICourseClient(vpn)
     email_items: list = []
+    errors: list[str] = []
 
     # Discover new semesters every run; only fetch catalogs not yet stored.
     _crawl_semester_catalog(client, db, reporter)
@@ -326,17 +349,23 @@ def run():
     scheduler = Scheduler(reporter=reporter)
 
     try:
-        all_lectures = _enumerate_lectures(client, db, reporter)
-        _drive_lectures(
+        all_lectures = _enumerate_lectures(client, db, reporter, errors)
+        errors.extend(_drive_lectures(
             client, db, scheduler, transcriber, summarizer, reporter,
             all_lectures, email_items,
-        )
+        ))
 
     finally:
         scheduler.shutdown()
 
-    _send_email(emailer, db, reporter, email_items)
+    try:
+        _send_email(emailer, db, reporter, email_items)
+    except Exception:
+        traceback.print_exc()
+        errors.append("Email delivery failed")
     reporter.run_footer()
+    if errors:
+        raise RuntimeError("Run failed:\n" + "\n".join(errors))
 
 
 if __name__ == "__main__":

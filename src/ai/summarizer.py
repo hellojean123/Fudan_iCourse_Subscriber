@@ -1,4 +1,4 @@
-"""LLM-based course lecture summarization via ModelScope API."""
+"""LLM-based course lecture summarization with multi-provider fallback."""
 
 import time
 
@@ -108,6 +108,10 @@ class Summarizer:
         if not response.choices:
             raise ValueError("API returned empty choices — likely content filter or quota exceeded")
         result = response.choices[0].message.content
+        if not result or not result.strip():
+            raise ValueError("API returned empty summary")
+        if response.choices[0].finish_reason == "length":
+            raise ValueError("API truncated summary")
         elapsed = time.time() - t0
         # Token usage helps explain run cost — every provider's billing is
         # token-based, and rate-limit decisions key off prompt size much
@@ -130,6 +134,48 @@ class Summarizer:
             )
         return result
 
+    @staticmethod
+    def error_label(error: Exception) -> str:
+        """Do not persist raw provider responses, URLs or credentials."""
+        status = getattr(error, "status_code", None)
+        label = type(error).__name__
+        if status is not None:
+            label += f" (HTTP {status})"
+        if "has no provider supported" in str(error):
+            label += ": model has no serving provider"
+        return label
+
+    def check_providers(self) -> list[str]:
+        """Probe all configured candidates with synthetic input, once per run.
+
+        Keep only models that actually return text, preserving provider/model
+        priority. Never infer an alternative ID from a 400 or catalog entry.
+        """
+        healthy = []
+        for provider in self.providers:
+            usable = []
+            for model in provider["models"]:
+                model_id = f"{provider['name']}/{model}"
+                try:
+                    response = self._clients[provider["name"]].chat.completions.create(
+                        model=model,
+                        messages=[{"role": "user", "content": "Reply with OK only."}],
+                        timeout=60,
+                    )
+                    if not response.choices or not (
+                        response.choices[0].message.content or ""
+                    ).strip():
+                        raise ValueError("Empty probe response")
+                    usable.append(model)
+                    healthy.append(model_id)
+                    print(f"[Provider check] {model_id}: OK")
+                except Exception as error:
+                    print(f"[Provider check] {model_id}: {self.error_label(error)}")
+            provider["models"] = usable
+        if not healthy:
+            raise RuntimeError("No configured LLM model passed the provider check")
+        return healthy
+
     def summarize(self, title: str, content: str) -> tuple[str, str]:
         """Summarize lecture, trying providers in MODEL_PROVIDERS order.
 
@@ -151,8 +197,8 @@ class Summarizer:
                     return (result, model_id)
                 except Exception as e:
                     print(f"[Summarizer] {model_id} failed: "
-                          f"{type(e).__name__}: {e}")
-                    errors.append(f"{model_id}: {e}")
+                          f"{self.error_label(e)}")
+                    errors.append(f"{model_id}: {self.error_label(e)}")
 
         raise RuntimeError(
             "All LLM models failed:\n" + "\n".join(errors)

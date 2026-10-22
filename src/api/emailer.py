@@ -407,18 +407,38 @@ class Emailer:
         if cid_images:
             print(f"[Emailer] Embedded {len(cid_images)} LaTeX images as CID")
 
-        # Retry with exponential backoff
+        # Retry connection/authentication only. After DATA starts, a network
+        # failure can be ambiguous: resubmitting here may duplicate a message
+        # already accepted by SMTP. Durable unsent state handles later retries.
         for attempt in range(3):
+            server = None
+            submitting = False
             try:
-                with smtplib.SMTP_SSL(self.host, self.port) as server:
-                    server.login(self.sender, self.password)
-                    server.sendmail(self.sender, self.receiver, msg.as_string())
+                server = smtplib.SMTP_SSL(self.host, self.port, timeout=60)
+                server.login(self.sender, self.password)
+                submitting = True
+                refused = server.sendmail(self.sender, self.receiver, msg.as_string())
+                if refused:
+                    raise RuntimeError("SMTP recipient refused")
                 print(f"[Emailer] Sent: {subject}")
                 return True
             except Exception as e:
-                print(f"[Emailer] Attempt {attempt + 1}/3 failed: {e}")
+                print(f"[Emailer] Attempt {attempt + 1}/3 failed: {type(e).__name__}")
+                if submitting:
+                    break
                 if attempt < 2:
                     time.sleep(2 ** attempt)
+            finally:
+                if server is not None:
+                    # A QUIT/disconnect error after sendmail accepted DATA must
+                    # not convert success into a resend on the next run.
+                    try:
+                        server.quit()
+                    except Exception:
+                        try:
+                            server.close()
+                        except Exception:
+                            pass
 
-        print("[Emailer] All send attempts failed.")
+        print("[Emailer] Delivery not confirmed; summaries remain unsent.")
         return False
