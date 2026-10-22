@@ -146,11 +146,9 @@ class LectureRunner:
 
         # ── Phase F — bucketed-prompt LLM summary ──────────────────────
         if not transcript.strip():
-            self._reporter.info("    Empty transcript, skipping summary.")
+            self._db.update_error(sub_id, "transcribe", "Empty transcript")
             self._release_audio(sub_id)
-            self._db.mark_processed(sub_id)
-            self._db.clear_error(sub_id)
-            return None
+            raise RuntimeError("Empty transcript; lecture left pending")
 
         summary = self._summarize(
             sub_id, course_title, transcript, transcript_segments,
@@ -308,7 +306,7 @@ class LectureRunner:
             # AudioDownloader returns None when get_video_url() returned
             # None — i.e. the lecture has no playable video.  Record an
             # error so the lecture is retried (the video may appear later)
-            # but abandoned after max_errors instead of every day forever.
+            # without an error-count cutoff: publishing may take several days.
             # The "no_video" stage is a contract with the frontend, which
             # renders it as a gray "无视频" hint instead of a red failure.
             self._reporter.lecture_skip_no_video(

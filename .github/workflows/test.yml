@@ -1,0 +1,35 @@
+name: Subscriber regression tests
+on:
+  pull_request:
+  push:
+    branches: [fix/provider-retry-delivery]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest pyyaml
+      - run: python -m pytest -q
+  provider-smoke:
+    # Only trusted in-repository pushes; no secrets on pull_request events.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install openai
+      - name: Verify configured endpoints with synthetic input
+        env:
+          SECRETS_CONTEXT: ${{ toJSON(secrets) }}
+        run: |
+          eval "$(python scripts/provider_env.py)"
+          unset SECRETS_CONTEXT
+          python scripts/check_providers.py

@@ -41,8 +41,11 @@ def main():
 
     emitted: set[str] = set()
     for provider in MODEL_PROVIDERS:
-        for field in ("api_key_env", "base_url_env"):
-            name = provider.get(field)
+        names = [provider.get(field) for field in
+                 ("api_key_env", "base_url_env", "models_env")]
+        names += provider.get("api_key_aliases", [])
+        names += provider.get("base_url_aliases", [])
+        for name in names:
             if not name or name in emitted:
                 continue
             emitted.add(name)

@@ -13,6 +13,11 @@ on:
         default: false
         type: boolean
 
+# Serialize runs that can deliver mail and persist the same database.
+concurrency:
+  group: icourse-delivery
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -135,15 +140,15 @@ jobs:
               gzip -d data/icourse.db.gz
               echo "Legacy compressed DB decrypted ($VER)."
             else
-              echo "::warning::Decryption failed (both keys). Starting with fresh database."
-              rm -f data/icourse.db data/icourse.db.gz
+              echo "::error::Database decryption failed; refusing to overwrite stored state."
+              exit 1
             fi
           elif [ -f data/icourse.db.enc ]; then
             if VER=$(decrypt_blob data/icourse.db.enc data/icourse.db); then
               echo "Legacy uncompressed DB decrypted ($VER)."
             else
-              echo "::warning::Decryption failed (both keys). Starting with fresh database."
-              rm -f data/icourse.db
+              echo "::error::Database decryption failed; refusing to overwrite stored state."
+              exit 1
             fi
           fi
 
@@ -177,7 +182,7 @@ jobs:
           python -u main.py
 
       - name: Deploy database to data branch
-        if: always()
+        if: always() && steps.db-before.outcome == 'success'
         env:
           STUID: ${{ secrets.STUID }}
           UISPSW: ${{ secrets.UISPSW }}

@@ -21,18 +21,23 @@ USER_AGENT = (
 
 # 模型服务商配置（按列表顺序作为优先级，从前往后尝试）。
 # 用户可以在这里随意添加/删除/重排服务商和模型。
-# 兼容性：只设置 DASHSCOPE_API_KEY 也能跑（modelscope 项的 api_key 直接读取它）。
+# MODELSCOPE_* is preferred; DASHSCOPE_* remains a legacy alias for existing installs.
+# IDs below were listed by ModelScope /v1/models on 2026-10-22.
+# Runtime probes verify serving availability; a catalog entry alone is insufficient.
 # 同名 provider 多次出现 → resolve_model_providers() 把它们的 models 合并到首次出
 # 现的那条；这避免 Summarizer 内部按 name 索引 client 字典时被后写覆盖。
 MODEL_PROVIDERS: list[dict] = [
     {
         "name": "modelscope",
-        "api_key_env": "DASHSCOPE_API_KEY",
-        "base_url_env": "DASHSCOPE_BASE_URL",
+        "api_key_env": "MODELSCOPE_API_KEY",
+        "api_key_aliases": ["DASHSCOPE_API_KEY"],
+        "base_url_env": "MODELSCOPE_BASE_URL",
+        "base_url_aliases": ["DASHSCOPE_BASE_URL"],
+        "models_env": "MODELSCOPE_MODELS",
         "default_base_url": "https://api-inference.modelscope.cn/v1/",
         "models": [
-            "deepseek-ai/DeepSeek-V4-Pro",
-            "deepseek-ai/DeepSeek-V4-Flash"
+            "deepseek-ai/DeepSeek-V4-Pro-0813",
+            "deepseek-ai/DeepSeek-V4.1-Flash-1017"
         ],
     },
     {
@@ -82,18 +87,25 @@ def resolve_model_providers() -> list[dict]:
     resolved: list[dict] = []
     by_name: dict[str, dict] = {}
     for p in MODEL_PROVIDERS:
-        api_key = os.environ.get(p["api_key_env"], "").strip()
+        api_key = next((os.environ.get(name, "").strip()
+                        for name in [p["api_key_env"], *p.get("api_key_aliases", [])]
+                        if os.environ.get(name, "").strip()), "")
         if not api_key:
             continue
         base_url = (
-            os.environ.get(p.get("base_url_env", ""), "").strip()
+            next((os.environ.get(name, "").strip()
+                  for name in [p.get("base_url_env", ""), *p.get("base_url_aliases", [])]
+                  if os.environ.get(name, "").strip()), "")
             or p.get("default_base_url", "")
         )
         if not base_url:
             continue
+        models_override = os.environ.get(p.get("models_env", ""), "").strip()
+        models = ([m.strip() for m in models_override.split(",") if m.strip()]
+                  if models_override else list(p["models"]))
         if p["name"] in by_name:
             existing = by_name[p["name"]]
-            for m in p["models"]:
+            for m in models:
                 if m not in existing["models"]:
                     existing["models"].append(m)
             continue
@@ -101,7 +113,7 @@ def resolve_model_providers() -> list[dict]:
             "name": p["name"],
             "api_key": api_key,
             "base_url": base_url,
-            "models": list(p["models"]),
+            "models": models,
         }
         resolved.append(entry)
         by_name[p["name"]] = entry

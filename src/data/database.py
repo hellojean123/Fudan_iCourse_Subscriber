@@ -196,15 +196,15 @@ class Database:
                                   max_errors: int = 3) -> list[dict]:
         """Return lectures that need (re-)processing.
 
-        Only returns lectures whose ``error_count`` is below *max_errors* —
-        a permanently-failing lecture (e.g. ``get-sub-info`` RuntimeError
-        for a removed recording) is abandoned after that many attempts
-        rather than clogging every workflow run.
+        Provider outages and delayed recordings must not permanently abandon
+        a lecture. Retry summarize/no_video even after the generic error cap;
+        preserve the cap for other failures (e.g. a removed recording).
         """
         query = (
             "SELECT * FROM lectures"
-            " WHERE processed_at IS NULL"
-            "   AND (error_count IS NULL OR error_count < ?)"
+            " WHERE (processed_at IS NULL OR error_stage IN ('summarize', 'no_video'))"
+            "   AND (error_count IS NULL OR error_count < ?"
+            "        OR error_stage IN ('summarize', 'no_video'))"
         )
         params: tuple = (max_errors,)
         if course_id:
@@ -407,9 +407,8 @@ class Database:
                 """SELECT l.*, c.title AS course_title, c.teacher
                    FROM lectures l
                    JOIN courses c ON l.course_id = c.course_id
-                   WHERE l.processed_at IS NOT NULL
-                     AND l.emailed_at IS NULL
-                     AND l.summary IS NOT NULL""",
+                   WHERE l.emailed_at IS NULL
+                     AND TRIM(COALESCE(l.summary, '')) != '' """,
             ).fetchall()
         return [dict(row) for row in rows]
 
