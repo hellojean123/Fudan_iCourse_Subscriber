@@ -183,7 +183,8 @@ def _drive_lectures(client: ICourseClient, db: Database,
                 course_id, course_title, lecture, next_info=next_info,
             )
             state = db.get_lecture(sub_id)
-            if not summary and state and state.get("error_stage") not in (None, "no_video"):
+            if (not summary and state and not state.get("processed_at")
+                    and state.get("error_stage") not in (None, "no_video")):
                 failures.append(f"Lecture {sub_id}: {state['error_stage']} failed")
             if summary:
                 email_items.append({
@@ -320,13 +321,14 @@ def run():
     if corrected:
         print(f"  [Date] Synced {corrected} lecture date(s) from sub_title", flush=True)
     transcriber = Transcriber()
-    summarizer = Summarizer() if config.COURSE_IDS else None
     emailer = Emailer() if (
         config.SMTP_EMAIL and config.SMTP_PASSWORD
     ) else None
 
     # Deliver durable summaries even during a provider outage.
-    _send_email(emailer, db, reporter, [])
+    if config.COURSE_IDS:
+        _send_email(emailer, db, reporter, [])
+    summarizer = Summarizer() if config.COURSE_IDS else None
     # Fail before expensive crawling/ASR when every configured endpoint is down.
     if summarizer:
         summarizer.check_providers()

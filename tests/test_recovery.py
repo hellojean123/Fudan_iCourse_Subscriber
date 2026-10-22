@@ -39,7 +39,7 @@ def test_retries_survive_error_cap_and_reopen(db, stage):
     assert db.get_lecture('s')['transcript'] == 'cached transcript'
 
 
-def test_generic_cap_and_enumeration_agree(db, monkeypatch):
+def test_normal_retries_have_no_lifetime_cap(db, monkeypatch):
     lecture(db, 'capped')
     for _ in range(4):
         db.update_error('capped', 'transcribe', 'bad recording')
@@ -55,7 +55,8 @@ def test_generic_cap_and_enumeration_agree(db, monkeypatch):
                      {'sub_id': 'new', 'has_playback': True}],
     }
     result = main._enumerate_lectures(client, db, Mock())
-    assert {r[2]['sub_id'] for r in result} == {'old', 'new'}
+    assert {r[2]['sub_id'] for r in result} == {'old', 'new', 'capped'}
+    assert db.get_unprocessed_lectures('c', max_errors=3) == [db.get_lecture('new')]
 
 
 def test_email_recovers_crash_window_and_never_resends(db):
@@ -225,3 +226,72 @@ def test_smtp_ambiguous_data_error_not_immediately_retried(monkeypatch):
     monkeypatch.setattr(module.smtplib, 'SMTP_SSL', Mock(return_value=smtp))
     assert not Emailer().send([dict(course_title='Course', sub_title='Lecture', date='', summary='text')])
     assert smtp.sendmail.call_count == 1
+
+
+def test_provider_env_exports_aliases_and_model_override(monkeypatch, capsys):
+    import json
+    from scripts import provider_env
+    monkeypatch.setenv('SECRETS_CONTEXT', json.dumps({
+        'dashscope_api_key': 'fake-old-key',
+        'modelscope_api_key': 'fake-new-key',
+        'modelscope_models': 'a,b',
+        'unrelated_secret': 'must-not-export',
+    }))
+    provider_env.main()
+    exports = capsys.readouterr().out
+    assert 'export DASHSCOPE_API_KEY=' in exports
+    assert 'export MODELSCOPE_API_KEY=' in exports
+    assert 'export MODELSCOPE_MODELS=' in exports
+    assert 'must-not-export' not in exports
+
+
+def test_workflows_serialize_delivery_and_preserve_failed_run_db():
+    import yaml
+    from pathlib import Path
+    workflows = [yaml.safe_load(Path('.github/workflows', name).read_text())
+                 for name in ['check.yml', 'single_run.yml']]
+    assert all(w['concurrency'] == {'group': 'icourse-delivery',
+                                   'cancel-in-progress': False} for w in workflows)
+    for workflow in workflows:
+        job = next(iter(workflow['jobs'].values()))
+        deploy = next(s for s in job['steps'] if s.get('name') == 'Deploy database to data branch')
+        assert deploy['if'] == "always() && steps.db-before.outcome == 'success'"
+
+
+def test_saved_unsent_delivery_precedes_missing_provider_failure(db, monkeypatch):
+    monkeypatch.setattr(config, 'COURSE_IDS', ['c'])
+    monkeypatch.setattr(main, 'Database', Mock(return_value=db))
+    for name in ['Reporter', 'Transcriber']:
+        monkeypatch.setattr(main, name, Mock())
+    send = Mock()
+    monkeypatch.setattr(main, '_send_email', send)
+    def unavailable():
+        assert send.call_count == 1
+        raise ValueError('No configured provider')
+    monkeypatch.setattr(main, 'Summarizer', unavailable)
+    with pytest.raises(ValueError, match='No configured provider'):
+        main.run()
+
+
+def test_recovery_end_to_end_preserves_cache_and_sends_once(db, monkeypatch):
+    from src.pipeline.lecture_runner import LectureRunner
+    lecture(db)
+    db.update_transcript('s', 'cached transcript from failed run')
+    for _ in range(5):
+        db.update_error('s', 'summarize', 'provider outage')
+    scheduler, transcriber, summarizer = Mock(), Mock(), Mock()
+    summarizer.summarize.return_value = ('recovered summary', 'fallback/model')
+    runner = LectureRunner(Mock(), db, scheduler, transcriber, summarizer, Mock())
+    runner._ppt = Mock()
+    row = db.get_unprocessed_lectures('c')[0]
+    summary = runner.run('c', 'Course', row)
+    assert summary == 'recovered summary'
+    transcriber.transcribe_tail.assert_not_called()
+    assert db.get_lecture('s')['error_count'] == 0
+    assert db.get_lecture('s')['processed_at']
+    emailer = Mock()
+    emailer.send.return_value = True
+    main._send_email(emailer, db, Mock(), [])
+    main._send_email(emailer, db, Mock(), [])
+    assert emailer.send.call_count == 1
+    assert db.get_lecture('s')['transcript'] == 'cached transcript from failed run'

@@ -53,3 +53,7 @@ db-viewer/
 # .github/
 # Shard inspection temp files
 _shard_inspect/
+
+# Committed recovery regression suite
+!tests/
+!tests/test_recovery.py

@@ -193,23 +193,26 @@ class Database:
         return {row["sub_id"] for row in rows}
 
     def get_unprocessed_lectures(self, course_id: str | None = None,
-                                  max_errors: int = 3) -> list[dict]:
-        """Return lectures that need (re-)processing.
+                                  max_errors: int | None = None) -> list[dict]:
+        """Return pending work, including failures from previous runs.
 
-        Provider outages and delayed recordings must not permanently abandon
-        a lecture. Retry summarize/no_video even after the generic error cap;
-        preserve the cap for other failures (e.g. a removed recording).
+        Normal scheduled runs have no lifetime retry cutoff: provider outages,
+        incomplete downloads and delayed recordings can all recover later.
+        An explicit max_errors is available for diagnostic/manual callers.
+        Terminal skips (processed with no summary) remain terminal, except
+        historical summarize/no_video errors, which must be recoverable.
         """
         query = (
             "SELECT * FROM lectures"
             " WHERE (processed_at IS NULL OR error_stage IN ('summarize', 'no_video'))"
-            "   AND (error_count IS NULL OR error_count < ?"
-            "        OR error_stage IN ('summarize', 'no_video'))"
         )
-        params: tuple = (max_errors,)
+        params: list = []
+        if max_errors is not None:
+            query += " AND COALESCE(error_count, 0) < ?"
+            params.append(max_errors)
         if course_id:
             query += " AND course_id = ?"
-            params = (max_errors, course_id)
+            params.append(course_id)
         with self._lock:
             rows = self.conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
@@ -401,7 +404,7 @@ class Database:
         return dict(row) if row else None
 
     def get_unsent_lectures(self) -> list[dict]:
-        """Find lectures that are processed but not yet emailed."""
+        """Find saved summaries not yet emailed, including a pre-mark_processed crash."""
         with self._lock:
             rows = self.conn.execute(
                 """SELECT l.*, c.title AS course_title, c.teacher
