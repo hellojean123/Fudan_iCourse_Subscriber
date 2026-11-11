@@ -45,6 +45,26 @@
 
 > 至少配置一个 LLM API Key（DASHSCOPE、DEEPSEEK 或 GEMINI）。程序按配置顺序自动回退尝试。如果需要选择其他的LLM供应商，可以在`src\runtime\config.py`路径下自定义供应商。
 
+### 邮箱二次认证（UIS MFA，实验性）
+
+学校启用链式二次认证后，密码认证可能只返回 `pageLevelNo=2`、`requestNumber` 和 `moduleCodes`，不再直接提供 `loginToken`。
+
+新增的邮箱验证码模块在 **GitHub Actions Secrets** 中支持以下配置：
+
+| Secret | 说明 |
+|---|---|
+| `ICOURSE_MFA_IMAP_USERNAME` | 接收 UIS 邮箱验证码的邮箱账号，默认采用 `RECEIVER_EMAIL` |
+| `ICOURSE_MFA_IMAP_HOST` | 接收邮箱的 IMAP 主机，QQ 邮箱默认 `imap.qq.com` |
+| `ICOURSE_MFA_IMAP_PASSWORD` | 接收邮箱的 IMAP 授权码，**不是 UIS 登录密码** |
+| `ICOURSE_MFA_IMAP_PORT` | IMAP SSL 端口，默认 993 |
+| `ICOURSE_MFA_SENDER_DOMAINS` | 验证码发件域名白名单，默认 `fudan.edu.cn` |
+| `ICOURSE_MFA_MODULE_CODE` | 可选。学校认证响应中实际提供的邮箱模块标识；不能凭空编造 |
+| `ICOURSE_MFA_CODE_FIELD` | 可选。学校校验接口实际接受的字段，默认 `otpCode`，须与真实页面核对 |
+
+如果接收地址恰好就是 QQ 邮件的 `SMTP_EMAIL`，且采用 QQ IMAP，程序可复用已有 `SMTP_PASSWORD` 授权码；否则必须设置独立 IMAP 凭据。**仅配置 `RECEIVER_EMAIL` 并不赋予读取收件箱的权限。**
+
+目前已支持从新收到的可信邮件中提取验证码并传递到第二阶段 `authExecute`；但学校是否自动发送验证码、邮箱模块名和请求字段尚未获得真实认证流验证。如果门户需要单独点击“发送验证码”，程序将无法自行触发未知接口，**不得把模拟测试通过理解为已完成真实端到端登录**。该功能应在独立分支完成真实认证验证后才合并部署。
+
 ### 第 3 步：获取课程 ID
 
 登录 [iCourse 网页版](https://icourse.fudan.edu.cn)，进入你要监控的课程页面，URL 中的数字就是课程 ID：
