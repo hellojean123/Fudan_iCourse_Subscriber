@@ -45,13 +45,13 @@ def _mail_config() -> tuple[str, int, str, str, tuple[str, ...]]:
         )
     sender_domains = tuple(
         d.strip().lower().lstrip("@")
-        for d in os.getenv("ICOURSE_MFA_SENDER_DOMAINS",
+        for d in (os.getenv("ICOURSE_MFA_SENDER_DOMAINS") or
                            "fudan.edu.cn").split(",")
         if d.strip()
     )
     if not sender_domains:
         raise EmailMFAError("Email MFA sender domain allowlist is empty")
-    return host, int(os.getenv("ICOURSE_MFA_IMAP_PORT", "993")), username, password, sender_domains
+    return host, int(os.getenv("ICOURSE_MFA_IMAP_PORT") or "993"), username, password, sender_domains
 
 
 def _is_allowed_sender(msg: email.message.Message,
