@@ -305,7 +305,15 @@ class WebVPNSession:
 
         login_token = data.get("loginToken", "")
         if not login_token:
-            raise RuntimeError("No loginToken in iCourse CAS response")
+            login_token = self._complete_icourse_email_mfa(
+                response=data,
+                lck=lck,
+                entity_id=entity_id,
+                request_type=request_type,
+                student_id=student_id,
+                auth_chain_code=auth_chain_code,
+                referer=f"{idp_vpn_base}/ac/",
+            )
         print("    loginToken: OK")
 
         # Step 6: Get CAS ticket (through WebVPN)
@@ -366,6 +374,117 @@ class WebVPNSession:
 
         print("    Could not verify iCourse auth via API, proceeding...")
         return True
+
+    def _complete_icourse_email_mfa(
+        self, *, response: dict, lck: str, entity_id: str,
+        request_type: str, student_id: str, auth_chain_code: str,
+        referer: str,
+    ) -> str:
+        """Continue a UIS MFA challenge without logging tokens or OTP values.
+
+        The provider-specific module and optional send endpoint must be
+        observed from the real portal or explicitly configured. Never infer a
+        challenge endpoint from an unrelated identity provider.
+        """
+        import os
+        from datetime import datetime, timezone
+        from src.api.mfa_email import EmailMFAError, wait_for_email_code
+
+        modules = response.get("moduleCodes") or []
+        if not isinstance(modules, list):
+            modules = []
+        page_level = response.get("pageLevelNo")
+        req_number = response.get("requestNumber")
+        if page_level != 2 and str(page_level) != "2" and not modules:
+            raise RuntimeError(
+                "No loginToken in iCourse CAS response; "
+                "not a recognized MFA challenge"
+            )
+        if not req_number:
+            raise RuntimeError(
+                "UIS MFA challenge lacks requestNumber; refusing an unverified request"
+            )
+        declared_module = os.environ.get("ICOURSE_MFA_MODULE_CODE", "").strip()
+        email_modules = [
+            m for m in modules if isinstance(m, str)
+            and ("mail" in m.lower() or "email" in m.lower())
+        ]
+        if declared_module:
+            if declared_module not in modules:
+                raise EmailMFAError(
+                    "ICOURSE_MFA_MODULE_CODE is not among the UIS offered MFA modules: "
+                    + ", ".join(str(m) for m in modules)
+                )
+            module_code = declared_module
+        elif len(email_modules) == 1:
+            module_code = email_modules[0]
+        else:
+            raise EmailMFAError(
+                "UIS requires MFA; email module cannot be determined. "
+                "Offered modules: " + ", ".join(str(m) for m in modules)
+                + ". Configure ICOURSE_MFA_MODULE_CODE from the actual portal."
+            )
+
+        # Some portals automatically dispatch the email challenge once the
+        # module is selected. Do not guess a send-code URL or perform a
+        # blind request that could lock the user's account.
+        send_url = os.environ.get("ICOURSE_MFA_SEND_URL", "").strip()
+        if send_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(send_url)
+            if parsed.scheme != "https" or parsed.hostname != urlparse(config.IDP_BASE).hostname:
+                raise EmailMFAError("ICOURSE_MFA_SEND_URL must use the trusted IDP HTTPS host")
+            raise EmailMFAError(
+                "Email code dispatch endpoint requires a verified request schema; "
+                "no unverified request was sent"
+            )
+
+        print("    [MFA] Email verification required; checking configured inbox...")
+        requested_at = datetime.now(timezone.utc)
+        otp = wait_for_email_code(requested_at=requested_at)
+        code_field = os.environ.get("ICOURSE_MFA_CODE_FIELD", "otpCode").strip()
+        if code_field not in ("otpCode", "verifyCode", "emailCode"):
+            raise EmailMFAError("Unrecognized MFA code field")
+        auth_para = {"loginName": student_id, "verifyCode": ""}
+        auth_para[code_field] = otp
+        payload = {
+            "authModuleCode": module_code,
+            "authChainCode": response.get("authChainCode") or auth_chain_code,
+            "entityId": entity_id,
+            "requestType": request_type,
+            "lck": lck,
+            "requestNumber": req_number,
+            "authPara": auth_para,
+        }
+        try:
+            reply = self.session.post(
+                get_vpn_url(f"{config.IDP_BASE}/idp/authn/authExecute"),
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Referer": referer,
+                    "Origin": config.WEBVPN_BASE,
+                },
+                timeout=60,
+            )
+            reply.raise_for_status()
+            answer = reply.json()
+        finally:
+            otp = None
+            payload["authPara"].pop(code_field, None)
+        if str(answer.get("code")) != "200":
+            raise EmailMFAError(
+                f"UIS MFA verification rejected (code={answer.get('code')}); "
+                "OTP and response body suppressed"
+            )
+        token = answer.get("loginToken")
+        if not token:
+            raise EmailMFAError(
+                "UIS MFA continuation succeeded without loginToken; "
+                "portal may require an additional stage"
+            )
+        print("    [MFA] Email verification succeeded.")
+        return token
 
     def get(self, url: str, **kwargs) -> requests.Response:
         """GET request through WebVPN. Converts URL automatically."""
