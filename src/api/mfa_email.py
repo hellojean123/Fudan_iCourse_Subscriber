@@ -26,9 +26,14 @@ class EmailMFAError(RuntimeError):
 def _mail_config() -> tuple[str, int, str, str, tuple[str, ...]]:
     username = (os.getenv("ICOURSE_MFA_IMAP_USERNAME") or
                 config.RECEIVER_EMAIL).strip()
-    host = os.getenv("ICOURSE_MFA_IMAP_HOST", "").strip()
-    if not host and username.lower().endswith("@qq.com"):
-        host = "imap.qq.com"
+    host = (os.getenv("ICOURSE_MFA_IMAP_HOST") or "").strip()
+    if not host:
+        mailbox = username.lower()
+        if mailbox.endswith("@qq.com"):
+            host = "imap.qq.com"
+        elif mailbox.endswith("@m.fudan.edu.cn"):
+            # Fudan student cloud mail uses Tencent Exmail over IMAPS.
+            host = "imap.exmail.qq.com"
     if not host:
         raise EmailMFAError(
             "Email MFA requires ICOURSE_MFA_IMAP_HOST for the receiving mailbox"
