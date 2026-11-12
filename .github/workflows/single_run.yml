@@ -171,6 +171,13 @@ jobs:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          ICOURSE_MFA_IMAP_HOST: ${{ secrets.ICOURSE_MFA_IMAP_HOST }}
+          ICOURSE_MFA_IMAP_PORT: ${{ secrets.ICOURSE_MFA_IMAP_PORT }}
+          ICOURSE_MFA_IMAP_USERNAME: ${{ secrets.ICOURSE_MFA_IMAP_USERNAME }}
+          ICOURSE_MFA_IMAP_PASSWORD: ${{ secrets.ICOURSE_MFA_IMAP_PASSWORD }}
+          ICOURSE_MFA_SENDER_DOMAINS: ${{ secrets.ICOURSE_MFA_SENDER_DOMAINS }}
+          ICOURSE_MFA_MODULE_CODE: ${{ secrets.ICOURSE_MFA_MODULE_CODE }}
+          ICOURSE_MFA_CODE_FIELD: ${{ secrets.ICOURSE_MFA_CODE_FIELD }}
           # All secrets, JSON-encoded. provider_env.py exports only the
           # vars named by config.MODEL_PROVIDERS (api_key_env /
           # base_url_env), so user-defined providers with custom env-var
