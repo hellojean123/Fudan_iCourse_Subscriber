@@ -25,8 +25,7 @@ from src.runtime.reporter import Reporter
 from src.runtime.scheduler import Scheduler
 from src.ai.summarizer import Summarizer
 from src.ai.transcriber import Transcriber
-from src.api.webvpn import WebVPNSession
-from src.api.mfa_email import EmailMFAError
+from src.api.webvpn import SecondFactorError, WebVPNSession
 
 
 def login_with_retry(max_attempts: int = 10) -> WebVPNSession:
@@ -47,9 +46,10 @@ def login_with_retry(max_attempts: int = 10) -> WebVPNSession:
             print("[Login] iCourse CAS...")
             vpn.authenticate_icourse()
             return vpn
-        except EmailMFAError:
-            # Missing IMAP setup or rejected OTP is not a transient VPN error.
-            # Repeating the entire login chain risks account lockout.
+        except SecondFactorError:
+            # Incorrect or missing TOTP is non-transient: avoid 10x login
+            # attempts and reduce risk of triggering account lockout.
+            vpn.session.close()
             raise
         except Exception as e:
             if attempt < max_attempts - 1:
