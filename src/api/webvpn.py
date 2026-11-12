@@ -390,6 +390,13 @@ class WebVPNSession:
         from datetime import datetime, timezone
         from src.api.mfa_email import EmailMFAError, wait_for_email_code
 
+        # Safe metadata only: never print requestNumber, loginToken or OTP.
+        print(
+            "    [MFA] UIS challenge detected: "
+            "page_level=" + str(response.get("pageLevelNo"))[:12]
+            + "; request_number_present=" + str(bool(response.get("requestNumber"))),
+            flush=True,
+        )
         modules = response.get("moduleCodes") or []
         if not isinstance(modules, list):
             modules = []
@@ -409,6 +416,11 @@ class WebVPNSession:
             m for m in modules if isinstance(m, str)
             and ("mail" in m.lower() or "email" in m.lower())
         ]
+        print(
+            "    [MFA] Offered methods: "
+            + ", ".join(str(m)[:40] for m in modules if isinstance(m, str))[:200],
+            flush=True,
+        )
         if declared_module:
             if declared_module not in modules:
                 raise EmailMFAError(
