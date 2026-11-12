@@ -54,7 +54,7 @@
 | Secret | 说明 |
 |---|---|
 | `ICOURSE_MFA_IMAP_USERNAME` | 接收 UIS 邮箱验证码的邮箱账号，默认采用 `RECEIVER_EMAIL` |
-| `ICOURSE_MFA_IMAP_HOST` | 接收邮箱的 IMAP 主机，QQ 邮箱默认 `imap.qq.com` |
+| `ICOURSE_MFA_IMAP_HOST` | 接收邮箱的 IMAP 主机。复旦学生云邮箱 `@m.fudan.edu.cn` 默认 `imap.exmail.qq.com`，QQ 邮箱默认 `imap.qq.com`；也可明确覆盖 |
 | `ICOURSE_MFA_IMAP_PASSWORD` | 接收邮箱的 IMAP 授权码，**不是 UIS 登录密码** |
 | `ICOURSE_MFA_IMAP_PORT` | IMAP SSL 端口，默认 993 |
 | `ICOURSE_MFA_SENDER_DOMAINS` | 验证码发件域名白名单，默认 `fudan.edu.cn` |

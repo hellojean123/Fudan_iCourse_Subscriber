@@ -38,6 +38,34 @@ def test_rejects_untrusted_or_irrelevant_mail(raw):
         not_before=datetime.now(timezone.utc) - timedelta(minutes=2)) is None
 
 
+def test_fudan_student_cloud_imap_host_autodetected(monkeypatch):
+    from src.runtime import config
+    monkeypatch.setattr(config, "RECEIVER_EMAIL", "student@m.fudan.edu.cn")
+    monkeypatch.setattr(config, "SMTP_EMAIL", "sender@qq.com")
+    monkeypatch.delenv("ICOURSE_MFA_IMAP_HOST", raising=False)
+    monkeypatch.delenv("ICOURSE_MFA_IMAP_USERNAME", raising=False)
+    monkeypatch.setenv("ICOURSE_MFA_IMAP_PASSWORD", "test-only")
+    host, port, username, password, _ = mfa_email._mail_config()
+    assert (host, port, username, password) == (
+        "imap.exmail.qq.com", 993, "student@m.fudan.edu.cn", "test-only")
+
+
+def test_fudan_student_cloud_explicit_host_precedence(monkeypatch):
+    from src.runtime import config
+    monkeypatch.setattr(config, "RECEIVER_EMAIL", "student@m.fudan.edu.cn")
+    monkeypatch.setenv("ICOURSE_MFA_IMAP_HOST", "imap.override.example")
+    monkeypatch.setenv("ICOURSE_MFA_IMAP_PASSWORD", "test-only")
+    assert mfa_email._mail_config()[0] == "imap.override.example"
+
+
+def test_fudan_student_cloud_empty_secret_uses_default(monkeypatch):
+    from src.runtime import config
+    monkeypatch.setattr(config, "RECEIVER_EMAIL", "student@m.fudan.edu.cn")
+    monkeypatch.setenv("ICOURSE_MFA_IMAP_HOST", "")
+    monkeypatch.setenv("ICOURSE_MFA_IMAP_PASSWORD", "test-only")
+    assert mfa_email._mail_config()[0] == "imap.exmail.qq.com"
+
+
 def test_missing_imap_credentials_fail_closed(monkeypatch):
     from src.runtime import config
     monkeypatch.setattr(config, "RECEIVER_EMAIL", "student@example.com")
