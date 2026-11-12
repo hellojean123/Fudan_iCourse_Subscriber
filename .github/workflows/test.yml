@@ -2,7 +2,7 @@ name: Subscriber regression tests
 on:
   pull_request:
   push:
-    branches: [fix/provider-retry-delivery, fix/icourse-email-mfa-20261111]
+    branches: [fix/provider-retry-delivery]
 permissions:
   contents: read
 jobs:
