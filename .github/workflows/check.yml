@@ -1,9 +1,6 @@
 name: iCourse Check
 
 on:
-  # Temporary verification trigger. Remove after the first live MFA diagnostic.
-  push:
-    branches: [main]
   schedule:
     # Every day at 19:36 BTC (UTC + 8)
     # 设计这个奇怪的时间是为了避免整点时的github队列峰值，避免排队过久。
