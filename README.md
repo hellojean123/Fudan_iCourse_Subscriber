@@ -35,6 +35,7 @@
 |---|---|---|---|
 | `STUID` | ✅ | 复旦学号 | `22307110000` |
 | `UISPSW` | ✅ | UIS 统一身份认证密码 | `your_password` |
+| `UIS_TOTP_SECRET` | ✅ | UIS 账号安全中绑定的动态口令 Base32 密钥 | `Base32 secret (not 6-digit code)` |
 | `COURSE_IDS` | ✅ | 要监控的课程 ID，多个用英文逗号分隔 | `35472,30251` |
 | `DASHSCOPE_API_KEY` | ⬜ | ModelScope 平台 API Key | `ms-xxxxxxxx` |
 | `DEEPSEEK_API_KEY` | ⬜ | DeepSeek API Key（推荐） | `sk-xxxxxxxx` |
@@ -45,25 +46,18 @@
 
 > 至少配置一个 LLM API Key（DASHSCOPE、DEEPSEEK 或 GEMINI）。程序按配置顺序自动回退尝试。如果需要选择其他的LLM供应商，可以在`src\runtime\config.py`路径下自定义供应商。
 
-### 邮箱二次认证（UIS MFA，实验性）
+#### 配置动态口令二次验证（TOTP）
 
-学校启用链式二次认证后，密码认证可能只返回 `pageLevelNo=2`、`requestNumber` 和 `moduleCodes`，不再直接提供 `loginToken`。
+> 2026/11/09 iCourse 平台升级了登录策略，要求所有账号在密码验证后进行二次验证（TOTP），原项目采用 TOTP 登录的方法进行二次验证
 
-新增的邮箱验证码模块在 **GitHub Actions Secrets** 中支持以下配置：
+进入 [UIS 个人中心的账号安全页面](https://id.fudan.edu.cn/uc/#/pc/userCenter/accountSecurity)，在「动态口令」中按提示完成绑定，并保存绑定时获取的 **Base32 密钥**，按上述的 Secrets 填入 `UIS_TOTP_SECRET` 即可
 
-| Secret | 说明 |
-|---|---|
-| `ICOURSE_MFA_IMAP_USERNAME` | 接收 UIS 邮箱验证码的邮箱账号，默认采用 `RECEIVER_EMAIL` |
-| `ICOURSE_MFA_IMAP_HOST` | 接收邮箱的 IMAP 主机。复旦学生云邮箱 `@m.fudan.edu.cn` 默认 `imap.exmail.qq.com`，QQ 邮箱默认 `imap.qq.com`；也可明确覆盖 |
-| `ICOURSE_MFA_IMAP_PASSWORD` | 接收邮箱的 IMAP 授权码，**不是 UIS 登录密码** |
-| `ICOURSE_MFA_IMAP_PORT` | IMAP SSL 端口，默认 993 |
-| `ICOURSE_MFA_SENDER_DOMAINS` | 验证码发件域名白名单，默认 `fudan.edu.cn` |
-| `ICOURSE_MFA_MODULE_CODE` | 可选。学校认证响应中实际提供的邮箱模块标识；不能凭空编造 |
-| `ICOURSE_MFA_CODE_FIELD` | 可选。学校校验接口实际接受的字段，默认 `otpCode`，须与真实页面核对 |
+![UIS 动态口令绑定页面，箭头所指密钥用于 UIS_TOTP_SECRET](docs/uis-totp.png)
 
-如果接收地址恰好就是 QQ 邮件的 `SMTP_EMAIL`，且采用 QQ IMAP，程序可复用已有 `SMTP_PASSWORD` 授权码；否则必须设置独立 IMAP 凭据。**仅配置 `RECEIVER_EMAIL` 并不赋予读取收件箱的权限。**
 
-目前已支持从新收到的可信邮件中提取验证码并传递到第二阶段 `authExecute`；但学校是否自动发送验证码、邮箱模块名和请求字段尚未获得真实认证流验证。如果门户需要单独点击“发送验证码”，程序将无法自行触发未知接口，**不得把模拟测试通过理解为已完成真实端到端登录**。该功能应在独立分支完成真实认证验证后才合并部署。
+> **注意：** `UIS_TOTP_SECRET` 是绑定时获得的 Base32 **密钥**，不是手机上每 30 秒变化的六位验证码，也不是邮箱 IMAP 授权码。不要把密钥提交到代码仓库、截图或日志。
+> 
+> 本 Fork 已采用原项目的 `userAndOtp` 流程，无需配置之前实验性的 `ICOURSE_MFA_IMAP_* ` Secrets；已存在的邮箱 Secrets 可以自行在 GitHub 设置中删除，不会影响课程摘要发送邮箱配置。
 
 ### 第 3 步：获取课程 ID
 
